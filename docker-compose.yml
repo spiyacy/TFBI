@@ -6,7 +6,7 @@ volumes:
 
 services:
   exporter:
-    image: nicolaka/tfbi-exporter:latest
+    image: spiyacy/tfbi-exporter:latest
     tty: true
     stdin_open: true
     environment:
