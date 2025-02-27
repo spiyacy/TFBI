@@ -2,16 +2,16 @@ package collector
 
 import (
 	"context"
-	"strconv"
 	"fmt"
+	"strconv"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/hashicorp/go-tfe"
 	"github.com/nicolaka/tfbi/internal/setup"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
-// TESTTT
 
 const (
 	// teams is the Metric subsystem we use.
@@ -23,7 +23,7 @@ var (
 	TeamsInfo = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, teamsSubsystem, "info"),
 		"Information about existing teams",
-		[]string{"id", "name","sso_team_id","users_count"}, nil,
+		[]string{"id", "name", "sso_team_id", "users_count"}, nil,
 	)
 )
 
@@ -49,33 +49,64 @@ func (ScrapeTeams) Version() string {
 	return "v2"
 }
 
+func getTeamsListPage(ctx context.Context, page int, organization string, config *setup.Config, ch chan<- prometheus.Metric) error {
+	teamsList, err := config.Client.Teams.List(ctx, organization, &tfe.TeamListOptions{
+		ListOptions: tfe.ListOptions{
+			PageSize:   pageSize,
+			PageNumber: page,
+		},
+		Include: []tfe.TeamIncludeOpt{
+			"organization-memberships",
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("%v, (organization=%s, page=%d)", err, organization, page)
+	}
+
+	for _, t := range teamsList.Items {
+		select {
+		case ch <- prometheus.MustNewConstMetric(
+			TeamsInfo,
+			prometheus.GaugeValue,
+			1,
+			t.ID,
+			t.Name,
+			t.SSOTeamID,
+			strconv.Itoa(t.UserCount),
+		):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+	}
+
+	return nil
+}
+
 func (ScrapeTeams) Scrape(ctx context.Context, config *setup.Config, ch chan<- prometheus.Metric) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for _, name := range config.Organizations {
+		name := name
 		g.Go(func() error {
-			teamsList, err := config.Client.Teams.List(ctx, name, nil)
-			for _, t := range teamsList.Items {
-					select {
-					case ch <- prometheus.MustNewConstMetric(
-						TeamsInfo,
-						prometheus.GaugeValue,
-						1,
-						t.ID,
-						t.Name,
-						t.SSOTeamID,
-						strconv.Itoa(t.UserCount),
-					):
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-			}
+			teamsList, err := config.Client.Teams.List(ctx, name, &tfe.TeamListOptions{
+				ListOptions: tfe.ListOptions{
+					PageSize: pageSize,
+				}})
+
 			if err != nil {
 				return fmt.Errorf("%v, organization=%s", err, name)
 			}
 
+			for i := 1; i <= teamsList.Pagination.TotalPages; i++ {
+				if err := getTeamsListPage(ctx, i, name, config, ch); err != nil {
+					return err
+				}
+			}
+
 			return nil
 		})
-		
 	}
-	return g.Wait()	
+
+	return g.Wait()
 }

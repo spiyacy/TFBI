@@ -2,8 +2,8 @@ package collector
 
 import (
 	"context"
-	"strconv"
 	"fmt"
+	"strconv"
 
 	"golang.org/x/sync/errgroup"
 
@@ -26,7 +26,7 @@ var (
 	WorkspacesInfo = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, workspacesSubsystem, "info"),
 		"Information about existing workspaces",
-		[]string{"id", "name", "organization", "terraform_version", "created_at", "environment", "current_run", "current_run_status", "current_run_created_at", "project", "assessments_enabled", "description", "resource_count", "policy_check_failures",  "run_failures", "runs_count" }, nil,
+		[]string{"id", "name", "organization", "terraform_version", "created_at", "environment", "current_run", "current_run_status", "current_run_created_at", "project", "assessments_enabled", "description", "resource_count", "policy_check_failures", "run_failures", "runs_count", "rum_count"}, nil,
 	)
 )
 
@@ -59,9 +59,11 @@ func getWorkspacesListPage(ctx context.Context, page int, organization string, c
 			PageNumber: page,
 		},
 		Include: []tfe.WSIncludeOpt{
-			// go-tfe bug 764 "project",
+			"project",
 			"current_run",
-			"organization",
+			// go-tfe/issues/1020
+			//"organization",
+			"current_state_version",
 		},
 	})
 	if err != nil {
@@ -76,24 +78,26 @@ func getWorkspacesListPage(ctx context.Context, page int, organization string, c
 			1,
 			w.ID,
 			w.Name,
-			w.Organization.Name,
+			organization,
 			w.TerraformVersion,
 			w.CreatedAt.String(),
 			w.Environment,
 			getCurrentRunID(w.CurrentRun),
 			getCurrentRunStatus(w.CurrentRun),
 			getCurrentRunCreatedAt(w.CurrentRun),
-			w.Project.ID,
+			w.Project.Name,
 			strconv.FormatBool(w.AssessmentsEnabled),
 			w.Description,
 			strconv.Itoa(w.ResourceCount),
 			strconv.Itoa(w.PolicyCheckFailures),
 			strconv.Itoa(w.RunFailures),
 			strconv.Itoa(w.RunsCount),
+			getCurrentRUM(w.CurrentStateVersion),
 		):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+
 	}
 
 	return nil
@@ -105,15 +109,15 @@ func (ScrapeWorkspaces) Scrape(ctx context.Context, config *setup.Config, ch cha
 	for _, name := range config.Organizations {
 		name := name
 		g.Go(func() error {
-			workspacesList, err := config.Client.Workspaces.List(ctx, name,&tfe.WorkspaceListOptions{
+			workspacesList, err := config.Client.Workspaces.List(ctx, name, &tfe.WorkspaceListOptions{
 				ListOptions: tfe.ListOptions{
-					PageSize:   pageSize,
-				},})
-			
+					PageSize: pageSize,
+				}})
+
 			if err != nil {
 				return fmt.Errorf("%v, organization=%s", err, name)
 			}
-			
+
 			for i := 1; i <= workspacesList.Pagination.TotalPages; i++ {
 				if err := getWorkspacesListPage(ctx, i, name, config, ch); err != nil {
 					return err
@@ -149,4 +153,18 @@ func getCurrentRunCreatedAt(r *tfe.Run) string {
 	}
 
 	return r.CreatedAt.String()
+}
+
+// Getting current Billible Resources Under Management (RUM)
+func getCurrentRUM(s *tfe.StateVersion) string {
+
+	if s == nil {
+		return "0"
+	}
+
+	if s.BillableRUMCount == nil {
+		return "0"
+	}
+
+	return strconv.Itoa(int(*s.BillableRUMCount))
 }

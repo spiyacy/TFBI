@@ -1,20 +1,33 @@
 version: '3.7'
 
 volumes:
+  go-modules:
   prometheus_data:
   grafana_data:
 
 services:
   exporter:
-    image: spiyacy/tfbi-exporter:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: dev
     tty: true
     stdin_open: true
+    command:
+      # - --api-insecure-skip-verify
+      # - --api-address ${TF_API_ADDRESS}
+      # - -o ${TF_ORGANIZATIONS}
+       - --log-level debug
     environment:
       - TF_API_TOKEN
       - TF_ORGANIZATIONS
-      - TFE_ADDRESS  
+     #- TFE_ADDRESS="https://TFE_ADDR"  
+      
     ports:
       - 9100:9100
+    volumes:
+      - ./:/go/src/github.com/nicolaka/tfbi
+      - go-modules:/go/pkg/mod
 
   prometheus:
     image: prom/prometheus:v3.0.1
